@@ -153,7 +153,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           },
           detailed: {
             type: "boolean",
-            description: "If true, returns the FULL tree with ALL attributes for EVERY node. WARNING: full tree can exceed 200KB on complex screens (e.g. launcher, web pages) and may be silently truncated by your MCP client, causing you to miss nodes. Default: false (compact summary, always safe). Recommended: use summary mode + find_views instead.",
+            description: "If true, returns the FULL tree with ALL attributes for EVERY node. CAUTION: full tree can exceed 200KB on complex screens (e.g. launcher, web pages) and may be silently truncated by your MCP client — you won't know you missed nodes. Default: false (compact summary, always safe). Prefer summary mode + find_views for reliable access to full attributes.",
           },
           ...DEVICE_SERIAL_PARAM,
           ...LANGUAGE_PARAM,
