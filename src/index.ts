@@ -87,8 +87,8 @@ const FIND_VIEWS_SCHEMA = {
     text_contains: stringOrArraySchema("Case-insensitive substring match on text. Single string or array (OR logic)."),
     text_regex: { type: "string", description: "Regular expression match on text" },
     content_desc: stringOrArraySchema("Exact content description match. Single string or array (OR logic)."),
-    class_name: stringOrArraySchema("View class name, e.g. Button, TextView, ImageView. Accepts short or full qualified name. Single string or array (OR logic)."),
-    resource_id: stringOrArraySchema("Resource ID, e.g. com.example:id/btn_login, or just btn_login. Single string or array (OR logic)."),
+    class_name: stringOrArraySchema("View class name. Uses suffix matching — 'TextView' matches 'android.widget.TextView', 'View' matches all *View subclasses. Accepts short or full qualified name. Single string or array (OR logic)."),
+    resource_id: stringOrArraySchema("Resource ID. Uses suffix matching — 'icon_title' matches 'com.example:id/icon_title'. Accepts full ID or short suffix. Single string or array (OR logic)."),
     package_name: stringOrArraySchema("Package name of the app, e.g. com.example.app. Single string or array (OR logic)."),
     clickable: { type: "boolean", description: "Filter by clickable state" },
     enabled: { type: "boolean", description: "Filter by enabled state" },
@@ -110,8 +110,8 @@ const FIND_VIEWS_SCHEMA = {
           text_contains: stringOrArraySchema("Case-insensitive substring match"),
           text_regex: { type: "string", description: "Regular expression match" },
           content_desc: stringOrArraySchema("Exact content description match"),
-          class_name: stringOrArraySchema("View class name"),
-          resource_id: stringOrArraySchema("Resource ID"),
+          class_name: stringOrArraySchema("View class name (suffix matching)"),
+          resource_id: stringOrArraySchema("Resource ID (suffix matching)"),
           package_name: stringOrArraySchema("Package name"),
           clickable: { type: "boolean" },
           enabled: { type: "boolean" },
@@ -143,14 +143,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "dump_view_tree",
-      description: "Get an overview of the current screen layout. Returns a compact summary (tree structure + class/state statistics) that is safe from truncation even on complex screens. Use this FIRST to understand the screen structure, then use find_views to query specific nodes with full attributes. Set detailed=true to return the full raw tree (WARNING: full tree can be >200KB on complex screens and may be truncated by the MCP client).",
+      description: "Get an overview of the current screen layout. Returns a compact summary (tree structure + class/state statistics) that is safe from truncation even on complex screens. Use this FIRST to understand the screen structure, then use find_views to query specific nodes with full attributes. Set detailed=true to return the full raw tree (WARNING: full tree can be >200KB on complex screens and may be silently truncated).",
       inputSchema: {
         type: "object",
         properties: {
-          package_name: {
-            type: "string",
-            description: "Optional: filter summary to only include views from this package.",
-          },
+          package_name: stringOrArraySchema("Optional: filter summary to only include views from this package (single string or array for OR)."),
           detailed: {
             type: "boolean",
             description: "If true, returns the FULL tree with ALL attributes for EVERY node. CAUTION: full tree can exceed 200KB on complex screens (e.g. launcher, web pages) and may be silently truncated by your MCP client — you won't know you missed nodes. Default: false (compact summary, always safe). Prefer summary mode + find_views for reliable access to full attributes.",
@@ -163,7 +160,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "find_views",
-      description: "Query specific Android views by any combination of attributes. Use this to get FULL node attributes (text, bounds, resource_id, etc.) for the nodes you actually care about — unlike dump_view_tree which returns a compact overview. All conditions are ANDed. String fields accept arrays for OR. Example: find_views(clickable=true, has_text=true) returns all clickable buttons and links. Example: find_views(class_name='TextView') returns all text views.",
+      description: "Query specific Android views by any combination of attributes. Use this to get FULL node attributes (text, bounds, resource_id, etc.) for the nodes you actually care about — unlike dump_view_tree which returns a compact overview. All conditions are ANDed. String fields accept arrays for OR. Use narrow filters to keep results small (results may truncate if > ~200 nodes). Example: find_views(clickable=true, has_text=true) to find buttons/links. Example: find_views(class_name='TextView') for text views. NOTE: class_name and resource_id use suffix matching — 'TextView' matches 'android.widget.TextView', 'icon_title' matches 'com.example:id/icon_title'.",
       inputSchema: FIND_VIEWS_SCHEMA,
     },
     {
