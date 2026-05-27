@@ -13,7 +13,9 @@ When an AI agent needs to know what's on your Android device screen, this tool g
 - **Analyze** the screen at a high level — extract text, find interactive elements, understand structure
 - **Debug** via JDWP — list debuggable processes and forward ports for deeper inspection
 
-> 🎬 [Watch the demo](assets/demo-en.webm) — AI agent inspecting and analyzing an Android screen.
+<video src="assets/demo-en.webm" controls width="720" title="AI inspecting and analyzing an Android screen">
+  Your browser doesn't support video playback.
+</video>
 
 ## Quick example
 
