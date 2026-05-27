@@ -38,14 +38,26 @@
 | **ADB**（Android SDK Platform Tools） | [在此下载](https://developer.android.com/tools/releases/platform-tools) — 需加入 `PATH` |
 | **Android 设备** | USB 或无线 ADB 连接，开启 USB 调试 |
 
-## 快速开始
+## AI 自动安装
+
+把这个仓库丢给任何支持 MCP 的 AI 助手，它就能一键安装并配置好：
+
+> "把 https://github.com/CHENZHIJIE255/android-ui-inspector-mcp 克隆下来跑一下安装"
+
+AI 助手会自动完成：
+1. 克隆仓库
+2. 执行 `npm install && npm run build && npm run setup`
+3. 安装脚本自动注册到 MCP 客户端配置（如 `opencode.json`）
+4. 配置完成，直接可用——无需手动操作
 
 ```bash
-git clone <仓库地址> && cd android-ui-inspector-mcp
+# 或手动执行：
+git clone https://github.com/CHENZHIJIE255/android-ui-inspector-mcp
+cd android-ui-inspector-mcp
 npm install && npm run build && npm run setup
 ```
 
-或在 MCP 客户端（如 `opencode.json`）中手动配置：
+安装后会自动写入 `~/.config/opencode/opencode.json`：
 
 ```json
 {

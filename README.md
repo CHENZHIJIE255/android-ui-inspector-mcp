@@ -38,14 +38,26 @@ When an AI agent (Claude, GPT, etc.) needs to know what's on your Android device
 | **ADB** (Android SDK Platform Tools) | [Download here](https://developer.android.com/tools/releases/platform-tools) — must be in `PATH` |
 | **Android device** | Connected via USB or wireless ADB, USB debugging enabled |
 
-## Quick start
+## AI auto install
+
+Show this repo to any AI agent powered by MCP — it can install and configure itself in one shot:
+
+> "Clone https://github.com/CHENZHIJIE255/android-ui-inspector-mcp and run the setup"
+
+The AI agent will:
+1. Clone the repo
+2. Run `npm install && npm run build && npm run setup`
+3. The setup script registers the server in your MCP client config (e.g. `opencode.json`)
+4. Server is ready to use — no manual steps
 
 ```bash
-git clone <repo-url> && cd android-ui-inspector-mcp
+# Or do it yourself:
+git clone https://github.com/CHENZHIJIE255/android-ui-inspector-mcp
+cd android-ui-inspector-mcp
 npm install && npm run build && npm run setup
 ```
 
-Or configure manually in your MCP client (e.g. `opencode.json`):
+After setup, the server is registered in `~/.config/opencode/opencode.json`:
 
 ```json
 {
