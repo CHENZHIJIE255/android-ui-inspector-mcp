@@ -12,7 +12,9 @@
     "start": "node dist/index.js",
     "dev": "tsc --watch",
     "setup": "node bin/setup.mjs",
-    "postinstall": "node bin/check-deps.mjs"
+    "postinstall": "node bin/check-deps.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.1",
@@ -20,8 +22,17 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.7"
   },
-  "keywords": ["android", "ui-inspector", "mcp", "adb", "uiautomator", "jdwp", "view-tree"],
+  "keywords": [
+    "android",
+    "ui-inspector",
+    "mcp",
+    "adb",
+    "uiautomator",
+    "jdwp",
+    "view-tree"
+  ],
   "license": "MIT"
 }
