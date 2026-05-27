@@ -21,7 +21,7 @@ const server = new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capa
 const DEVICE_SERIAL_PARAM = {
     device_serial: {
         type: "string",
-        description: "Target a specific device serial. Each call is independent — you can freely switch between different devices across calls without any disconnect/connect step. If omitted, auto-selects the first connected device. Use list_debuggable_processes to see available devices. / 目标设备序列号。每次调用独立，可在不同调用间自由切换不同设备，无需中断或重连。省略时自动选择第一个在线设备。",
+        description: "Target a specific device serial. Each call is independent — you can freely switch between different devices across calls without any disconnect/connect step. If omitted, auto-selects the first connected device. Use list_debuggable_processes to see available devices.",
     },
 };
 /**
@@ -31,7 +31,7 @@ const DEVICE_SERIAL_PARAM = {
 const LANGUAGE_PARAM = {
     language: {
         type: "string",
-        description: "Response language: en | zh. Auto-detected from env if omitted. / 响应语言：en | zh，省略时从环境变量自动检测。",
+        description: "Response language: en | zh. Auto-detected from env if omitted.",
     },
 };
 /**
@@ -125,13 +125,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
         {
             name: "dump_view_tree",
-            description: "Dump the current Android ViewTree hierarchy via uiautomator. Returns full tree with all attributes (text, bounds, clickable, etc.). / 通过 uiautomator 导出 Android 视图层次结构。",
+            description: "Dump the current Android ViewTree hierarchy via uiautomator. Returns full tree with all attributes (text, bounds, clickable, etc.).",
             inputSchema: {
                 type: "object",
                 properties: {
                     package_name: {
                         type: "string",
-                        description: "Optional: filter results to only include views from this package. / 可选：只返回指定包的视图。",
+                        description: "Optional: filter results to only include views from this package.",
                     },
                     ...DEVICE_SERIAL_PARAM,
                     ...LANGUAGE_PARAM,
@@ -141,12 +141,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         {
             name: "find_views",
-            description: "Find Android views matching criteria. All specified conditions are ANDed together. Returns matching views with full attributes. Example: find(text='登录', clickable=true) returns clickable buttons with text '登录'. / 查找符合条件的 Android 视图，所有条件取 AND。",
+            description: "Find Android views matching criteria. All specified conditions are ANDed together. Returns matching views with full attributes. Example: find(text='login', clickable=true) returns clickable buttons with text 'login'.",
             inputSchema: FIND_VIEWS_SCHEMA,
         },
         {
             name: "list_debuggable_processes",
-            description: "List debuggable processes on the device via JDWP / adb jdwp. Returns PIDs and package names of apps that have debugging enabled. / 列出设备上可调试的进程（PID + 包名）。",
+            description: "List debuggable processes on the device via JDWP / adb jdwp. Returns PIDs and package names of apps that have debugging enabled.",
             inputSchema: {
                 type: "object",
                 properties: {
@@ -158,12 +158,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         {
             name: "jdwp_connect",
-            description: "Forward a local port to a debuggable process via JDWP. Returns success/failure of the JDWP handshake. This allows deeper inspection of the app's live View objects. / 通过 JDWP 转发本地端口到可调试进程，返回握手结果。",
+            description: "Forward a local port to a debuggable process via JDWP. Returns success/failure of the JDWP handshake. This allows deeper inspection of the app's live View objects.",
             inputSchema: {
                 type: "object",
                 properties: {
-                    pid: { type: "number", description: "Process ID of the debuggable app / 可调试应用的进程 ID" },
-                    port: { type: "number", description: "Optional: local TCP port to forward (default: 8700). / 可选：本地 TCP 端口（默认 8700）" },
+                    pid: { type: "number", description: "Process ID of the debuggable app" },
+                    port: { type: "number", description: "Optional: local TCP port to forward (default: 8700)." },
                     ...DEVICE_SERIAL_PARAM,
                     ...LANGUAGE_PARAM,
                 },
