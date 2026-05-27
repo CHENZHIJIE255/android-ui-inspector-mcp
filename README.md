@@ -6,10 +6,11 @@
 
 ## What it does
 
-When an AI agent (Claude, GPT, etc.) needs to know what's on your Android device screen, this tool gives it a direct window in:
+When an AI agent needs to know what's on your Android device screen, this tool gives it a direct window in:
 
 - **Dump** the full view tree from any connected Android device
 - **Find** views by text, class name, resource ID, content description — with multi-value and cross-field queries
+- **Analyze** the screen at a high level — extract text, find interactive elements, understand structure
 - **Debug** via JDWP — list debuggable processes and forward ports for deeper inspection
 
 ## Quick example
@@ -130,6 +131,42 @@ Forward a local port to a debuggable process via JDWP.
 |-------|------|-------------|
 | `pid` | `number` | Process ID |
 | `port` | `number` (optional) | Local TCP port (default: 8700) |
+| `device_serial` | `string` (optional) | Target device serial |
+| `language` | `"en"` \| `"zh"` (optional) | Response language |
+
+### `tree_summary`
+
+Deep structural analysis of the view tree. Returns depth-by-depth breakdown, scrollable containers, class distribution, leaf vs container counts, and interactive element tallies.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `device_serial` | `string` (optional) | Target device serial |
+| `language` | `"en"` \| `"zh"` (optional) | Response language |
+
+### `analyze_screen`
+
+High-level screen understanding. Returns app info, screen type guess (form/list/settings/tabbed), navigation elements, text content summary, and an interactive summary.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `device_serial` | `string` (optional) | Target device serial |
+| `language` | `"en"` \| `"zh"` (optional) | Response language |
+
+### `extract_text_content`
+
+Extract ALL visible text from the current screen. Returns deduplicated text items with bounds, class_name, and resource_id.
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `device_serial` | `string` (optional) | Target device serial |
+| `language` | `"en"` \| `"zh"` (optional) | Response language |
+
+### `find_interactive`
+
+Find ALL interactive UI elements grouped by type: clickable controls, scrollable containers, input/editable fields, and focusable elements. Every element includes full bounds, text, and resource_id.
+
+| Param | Type | Description |
+|-------|------|-------------|
 | `device_serial` | `string` (optional) | Target device serial |
 | `language` | `"en"` \| `"zh"` (optional) | Response language |
 

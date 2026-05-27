@@ -19,7 +19,7 @@ import { dumpViewTreeXml, listDebuggableProcesses, forwardJdwp, removeForward, j
 import { parseViewTreeXml } from "./parser.js";
 import { findViews } from "./matcher.js";
 import { type Locale, t, detectLocale, listLocales } from "./i18n.js";
-import type { ViewNode, FindParams, ViewTreeResult } from "./types.js";
+import type { ViewNode, Bounds, FindParams, ViewTreeResult } from "./types.js";
 
 const SERVER_NAME = "android-ui-inspector-mcp";
 const SERVER_VERSION = "0.2.0";
@@ -190,6 +190,54 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         additionalProperties: false,
       },
     },
+    {
+      name: "tree_summary",
+      description: "Deep structural analysis of the view tree. Returns depth-by-depth breakdown, scrollable containers (RecyclerView/ScrollView/ListView), class distribution, leaf vs container counts, and interactive element tallies. Unlike dump_view_tree's compact overview, this gives a thorough structural picture with per-level detail.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ...DEVICE_SERIAL_PARAM,
+          ...LANGUAGE_PARAM,
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "analyze_screen",
+      description: "Comprehensive high-level screen analysis. Returns app info, screen type guess (form/list/settings/tabbed/etc), navigation elements (top bar, bottom nav), text content summary, input fields and clickable elements counts, and a plain-english interactive summary. Use this to quickly understand WHAT a screen is about before drilling into details.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ...DEVICE_SERIAL_PARAM,
+          ...LANGUAGE_PARAM,
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "extract_text_content",
+      description: "Extract ALL visible text from the current screen. Returns deduplicated text items with bounds, class_name, and resource_id. Unlike dump_view_tree which shows text inline in the tree structure, this gives a clean flat list focused purely on text content — ideal for understanding what information is displayed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ...DEVICE_SERIAL_PARAM,
+          ...LANGUAGE_PARAM,
+        },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "find_interactive",
+      description: "Find ALL interactive UI elements on screen, grouped by interaction type. Returns separate lists for: clickable controls (buttons, links, icons), scrollable containers, input/editable fields, and focusable elements. Every element includes full bounds, text, and resource_id. Use this to understand what the user can actually interact with.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          ...DEVICE_SERIAL_PARAM,
+          ...LANGUAGE_PARAM,
+        },
+        additionalProperties: false,
+      },
+    },
   ],
 }));
 
@@ -277,6 +325,422 @@ function summarizeTree(roots: ViewNode[]): TreeSummary {
     class_summary: classCount,
     stats,
     tree: treeLines,
+  };
+}
+
+/**
+ * ── Screen Analysis Helpers ──
+ * Tools that analyze the full view tree and return structured, actionable results.
+ * All operate on the complete XML tree (no truncation) since they run server-side.
+ * / 完整视图树分析工具。服务器端运行，不存在截断问题。
+ */
+
+/**
+ * Node depth and position info used during tree walk.
+ * / 树遍历中使用的深度和位置信息。
+ */
+interface TreeNodeInfo {
+  node: ViewNode;
+  depth: number;
+}
+
+/**
+ * Walk tree and collect depth-by-depth breakdown, scrollable containers, class distribution.
+ * / 遍历树收集深度分布、可滚动容器、类分布等结构信息。
+ */
+interface TreeBreakdown {
+  app: string;
+  screen_resolution: string;
+  total_nodes: number;
+  max_depth: number;
+  elapsed_ms: number;
+  depth_breakdown: Record<string, { node_count: number; classes: Record<string, number> }>;
+  class_summary: Record<string, number>;
+  leaf_vs_container: { leaves: number; containers: number };
+  interactive_count: { clickable: number; scrollable: number; focusable: number; editable: number };
+  scrollable_containers: Array<{ class: string; resource_id: string; children_count: number; bounds: Bounds }>;
+}
+
+function buildTreeBreakdown(roots: ViewNode[]): Omit<TreeBreakdown, "elapsed_ms"> {
+  let totalNodes = 0;
+  let maxDepth = 0;
+  const classCount: Record<string, number> = {};
+  const depthMap: Record<number, { node_count: number; classes: Record<string, number> }> = {};
+  let leaves = 0;
+  let containers = 0;
+  let clickable = 0;
+  let scrollable = 0;
+  let focusable = 0;
+  let editable = 0;
+  const apps = new Set<string>();
+  let screenRes = "";
+  const scrollContainers: Array<{ class: string; resource_id: string; children_count: number; bounds: Bounds }> = [];
+
+  function walk(nodes: ViewNode[], depth: number) {
+    for (const n of nodes) {
+      totalNodes++;
+      maxDepth = Math.max(maxDepth, depth);
+
+      if (!depthMap[depth]) {
+        depthMap[depth] = { node_count: 0, classes: {} };
+      }
+      depthMap[depth].node_count++;
+      depthMap[depth].classes[n.class_name] = (depthMap[depth].classes[n.class_name] || 0) + 1;
+
+      classCount[n.class_name] = (classCount[n.class_name] || 0) + 1;
+      if (n.clickable) clickable++;
+      if (n.scrollable) scrollable++;
+      if (n.focusable) focusable++;
+      if (n.class_name.includes("EditText") || n.class_name.includes("Editor")) editable++;
+      if (n.package_name) apps.add(n.package_name);
+      if (depth === 0) screenRes = `${n.bounds.width}x${n.bounds.height}`;
+
+      if (n.children && n.children.length > 0) {
+        containers++;
+        // Detect scrollable containers (RecyclerView, ScrollView, ListView, etc.)
+        const cn = n.class_name.toLowerCase();
+        if (n.scrollable || cn.includes("scrollview") || cn.includes("recyclerview") || cn.includes("listview")) {
+          scrollContainers.push({
+            class: n.class_name,
+            resource_id: n.resource_id,
+            children_count: countAllDescendants(n) - 1,
+            bounds: n.bounds,
+          });
+        }
+        walk(n.children, depth + 1);
+      } else {
+        leaves++;
+      }
+    }
+  }
+
+  walk(roots, 0);
+
+  return {
+    app: apps.size === 1 ? [...apps][0] : apps.size > 1 ? `${apps.size} apps` : "(none)",
+    screen_resolution: screenRes,
+    total_nodes: totalNodes,
+    max_depth: maxDepth,
+    depth_breakdown: depthMap,
+    class_summary: classCount,
+    leaf_vs_container: { leaves, containers },
+    interactive_count: { clickable, scrollable, focusable, editable },
+    scrollable_containers: scrollContainers,
+  };
+}
+
+function countAllDescendants(node: ViewNode): number {
+  let count = 1;
+  for (const child of node.children || []) {
+    count += countAllDescendants(child);
+  }
+  return count;
+}
+
+/**
+ * Collect all text content from the tree, deduplicated, with bounds.
+ * / 收集树中所有文本内容，去重，附带位置信息。
+ */
+interface TextContentItem {
+  text: string;
+  resource_id: string;
+  class_name: string;
+  bounds: Bounds;
+}
+
+function extractAllText(roots: ViewNode[]): TextContentItem[] {
+  const result: TextContentItem[] = [];
+  const seen = new Set<string>();
+
+  function walk(nodes: ViewNode[]) {
+    for (const n of nodes) {
+      const text = n.text?.trim() || n.content_desc?.trim();
+      if (text) {
+        const key = `${text}|${n.bounds.left}|${n.bounds.top}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          result.push({
+            text,
+            resource_id: n.resource_id,
+            class_name: n.class_name,
+            bounds: n.bounds,
+          });
+        }
+      }
+      if (n.children) walk(n.children);
+    }
+  }
+
+  walk(roots);
+  return result;
+}
+
+/**
+ * Find all interactive elements, grouped by interaction type.
+ * / 查找所有可交互元素，按交互类型分组。
+ */
+interface InteractiveGroup {
+  clickable: Array<{
+    text: string;
+    content_desc: string;
+    class_name: string;
+    resource_id: string;
+    bounds: Bounds;
+    enabled: boolean;
+  }>;
+  scrollable: Array<{
+    text: string;
+    class_name: string;
+    resource_id: string;
+    bounds: Bounds;
+    children_count: number;
+  }>;
+  input_fields: Array<{
+    text: string;
+    hint: string;
+    class_name: string;
+    resource_id: string;
+    bounds: Bounds;
+    enabled: boolean;
+    focused: boolean;
+  }>;
+  focusable: Array<{
+    text: string;
+    content_desc: string;
+    class_name: string;
+    resource_id: string;
+    bounds: Bounds;
+  }>;
+}
+
+function findInteractiveElements(roots: ViewNode[]): InteractiveGroup {
+  const clickable: InteractiveGroup["clickable"] = [];
+  const scrollable: InteractiveGroup["scrollable"] = [];
+  const inputFields: InteractiveGroup["input_fields"] = [];
+  const focusable: InteractiveGroup["focusable"] = [];
+  const seenClickable = new Set<string>();
+  const seenScrollable = new Set<string>();
+  const seenInput = new Set<string>();
+  const seenFocusable = new Set<string>();
+
+  function walk(nodes: ViewNode[]) {
+    for (const n of nodes) {
+      // Clickable — take top-most clickable (skip children of clickable parents)
+      // / 可点击元素 — 取最外层的，跳过可点击父节点内部的子节点
+      if (n.clickable && !n.class_name.includes("ViewGroup") && !n.class_name.includes("Layout")) {
+        const key = n.resource_id || `${n.class_name}|${n.bounds.left}|${n.bounds.top}`;
+        if (!seenClickable.has(key)) {
+          seenClickable.add(key);
+          clickable.push({
+            text: n.text || "",
+            content_desc: n.content_desc || "",
+            class_name: n.class_name,
+            resource_id: n.resource_id,
+            bounds: n.bounds,
+            enabled: n.enabled,
+          });
+        }
+      }
+
+      // Input fields / 输入框
+      if (n.class_name.includes("EditText") || n.class_name === "android.widget.EditText") {
+        const key = `${n.bounds.left}|${n.bounds.top}`;
+        if (!seenInput.has(key)) {
+          seenInput.add(key);
+          inputFields.push({
+            text: n.text || "",
+            hint: n.content_desc || "",
+            class_name: n.class_name,
+            resource_id: n.resource_id,
+            bounds: n.bounds,
+            enabled: n.enabled,
+            focused: n.focused,
+          });
+        }
+      }
+
+      // Focusable (non-input)
+      if (n.focusable && !n.class_name.includes("EditText")) {
+        const key = `${n.class_name}|${n.bounds.left}|${n.bounds.top}`;
+        if (!seenFocusable.has(key)) {
+          seenFocusable.add(key);
+          focusable.push({
+            text: n.text || "",
+            content_desc: n.content_desc || "",
+            class_name: n.class_name,
+            resource_id: n.resource_id,
+            bounds: n.bounds,
+          });
+        }
+      }
+
+      if (n.children) walk(n.children);
+    }
+  }
+
+  walk(roots);
+
+  // Scrollable containers: collect from tree walk
+  // / 可滚动容器：从整树收集
+  function collectScrollable(nodes: ViewNode[]): void {
+    for (const n of nodes) {
+      const cn = n.class_name.toLowerCase();
+      const isScrollContainer = n.scrollable
+        || cn.includes("scrollview")
+        || cn.includes("recyclerview")
+        || cn.includes("listview")
+        || cn.includes("viewpager");
+      if (isScrollContainer) {
+        const key = n.resource_id || `${n.class_name}|${n.bounds.left}|${n.bounds.top}`;
+        if (!seenScrollable.has(key)) {
+          seenScrollable.add(key);
+          scrollable.push({
+            text: n.text || "",
+            class_name: n.class_name,
+            resource_id: n.resource_id,
+            bounds: n.bounds,
+            children_count: countAllDescendants(n) - 1,
+          });
+        }
+      }
+      if (n.children) collectScrollable(n.children);
+    }
+  }
+  collectScrollable(roots);
+
+  return { clickable, scrollable, input_fields: inputFields, focusable };
+}
+
+/** Determine screen type from tree structure / 从树结构推断屏幕类型。 */
+function guessScreenType(roots: ViewNode[], flatTexts: string[]): string {
+  const flatList = flatTexts.join(" ").toLowerCase();
+  const classNames = new Set<string>();
+
+  function collectClasses(nodes: ViewNode[]) {
+    for (const n of nodes) {
+      classNames.add(n.class_name);
+      if (n.children) collectClasses(n.children);
+    }
+  }
+  collectClasses(roots);
+
+  const hasListView = classNames.has("android.widget.ListView") || classNames.has("androidx.recyclerview.widget.RecyclerView");
+  const hasGridView = classNames.has("android.widget.GridView");
+  const hasWebView = classNames.has("android.webkit.WebView");
+  const hasMap = classNames.has("com.google.android.gms.maps.MapView") || classNames.has("MapView");
+  const hasEditText = [...classNames].some(c => c.includes("EditText"));
+  const hasSpinner = [...classNames].some(c => c.includes("Spinner"));
+  const hasCheckBox = [...classNames].some(c => c.includes("CheckBox") || c.includes("Switch"));
+  const hasTabWidget = [...classNames].some(c => c.includes("TabWidget") || c.includes("TabLayout"));
+  const hasBottomNav = [...classNames].some(c => c.includes("BottomNavigation"));
+
+  const hints: string[] = [];
+  if (hasEditText && hasListView) hints.push("search_or_list");
+  else if (hasEditText && flatTexts.length < 10) hints.push("form");
+  else if (hasWebView) hints.push("web_view");
+  else if (hasMap) hints.push("map");
+  else if (hasListView && flatTexts.length > 10) hints.push("list");
+  else if (hasGridView) hints.push("grid");
+  else if (hasSpinner && hasCheckBox) hints.push("settings_filter");
+  else if (hasTabWidget || hasBottomNav) hints.push("tabbed");
+
+  return hints.length > 0 ? hints.join("/") : "generic";
+}
+
+/**
+ * High-level screen analysis: returns a structured description of what's on screen.
+ * / 高级屏幕分析：返回当前屏幕的结构化描述。
+ */
+interface ScreenAnalysis {
+  app: string;
+  screen_resolution: string;
+  screen_type: string;
+  total_nodes: number;
+  text_content: string[];
+  navigation: {
+    top_bar: Array<{ text: string; resource_id: string }>;
+    bottom_nav: Array<{ text: string; resource_id: string }>;
+  };
+  content_area: {
+    has_scrollable_content: boolean;
+    input_fields_count: number;
+    clickable_elements_count: number;
+  };
+  interactive_summary: string;
+}
+
+function analyzeScreen(roots: ViewNode[]): ScreenAnalysis {
+  const apps = new Set<string>();
+  let screenRes = "";
+  let totalNodes = 0;
+  let hasScrollableContent = false;
+
+  const topBarElements: Array<{ text: string; resource_id: string }> = [];
+  const bottomNavElements: Array<{ text: string; resource_id: string }> = [];
+  const texts: string[] = [];
+  let inputCount = 0;
+  let clickableCount = 0;
+
+  function walk(nodes: ViewNode[], depth: number) {
+    for (const n of nodes) {
+      totalNodes++;
+      if (n.package_name) apps.add(n.package_name);
+      if (depth === 0) screenRes = `${n.bounds.width}x${n.bounds.height}`;
+
+      const rid = n.resource_id || "";
+      const cn = n.class_name.toLowerCase();
+
+      // Top bar detection (near top of screen, likely title bar / toolbar)
+      if (depth <= 3 && n.bounds.top < 200 && (n.text || n.content_desc)) {
+        topBarElements.push({
+          text: n.text || n.content_desc || "",
+          resource_id: rid,
+        });
+      }
+
+      // Bottom navigation detection
+      if (cn.includes("bottomnavigation") || cn.includes("tab")) {
+        if (n.text) {
+          bottomNavElements.push({ text: n.text, resource_id: rid });
+        }
+      }
+
+      if (n.text?.trim()) texts.push(n.text.trim());
+      if (n.content_desc?.trim()) texts.push(n.content_desc.trim());
+      if (n.class_name.includes("EditText")) inputCount++;
+      if (n.clickable) clickableCount++;
+      if (n.scrollable || cn.includes("scrollview") || cn.includes("recyclerview")) hasScrollableContent = true;
+
+      if (n.children) walk(n.children, depth + 1);
+    }
+  }
+
+  walk(roots, 0);
+
+  const screenType = guessScreenType(roots, texts);
+  const uniqueTexts = [...new Set(texts)];
+
+  return {
+    app: apps.size === 1 ? [...apps][0] : apps.size > 1 ? `${apps.size} apps` : "(none)",
+    screen_resolution: screenRes,
+    screen_type: screenType,
+    total_nodes: totalNodes,
+    text_content: uniqueTexts.slice(0, 50), // cap at 50 texts for concise summary
+    navigation: {
+      top_bar: topBarElements.slice(0, 5),
+      bottom_nav: bottomNavElements,
+    },
+    content_area: {
+      has_scrollable_content: hasScrollableContent,
+      input_fields_count: inputCount,
+      clickable_elements_count: clickableCount,
+    },
+    interactive_summary: [
+      inputCount > 0 ? `${inputCount} input field(s)` : null,
+      clickableCount > 0 ? `${clickableCount} clickable element(s)` : null,
+      hasScrollableContent ? "scrollable content" : null,
+      uniqueTexts.length > 0 ? `${uniqueTexts.length} text item(s)` : null,
+    ].filter(Boolean).join(", "),
   };
 }
 
@@ -425,6 +889,79 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           isError: true,
         };
       }
+    }
+
+    case "tree_summary":
+    case "analyze_screen":
+    case "extract_text_content":
+    case "find_interactive": {
+      const analysisArgs = (args ?? {}) as Record<string, unknown>;
+      const analysisSerial = analysisArgs.device_serial as string | undefined;
+      const lang = resolveLocale(analysisArgs.language as string | undefined);
+      const start = Date.now();
+
+      let xml: string;
+      try {
+        xml = dumpViewTreeXml(analysisSerial);
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: e instanceof Error ? e.message : String(e) }) }],
+          isError: true,
+        };
+      }
+
+      const roots = parseViewTreeXml(xml);
+      if (roots.length === 0) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: t(lang, "viewtree.no_root") }) }],
+          isError: true,
+        };
+      }
+
+      let result: Record<string, unknown>;
+      switch (name) {
+        case "tree_summary": {
+          const breakdown = buildTreeBreakdown(roots);
+          result = { ...breakdown, elapsed_ms: Date.now() - start } as unknown as Record<string, unknown>;
+          break;
+        }
+        case "analyze_screen": {
+          const analysis = analyzeScreen(roots);
+          result = { ...analysis, elapsed_ms: Date.now() - start } as unknown as Record<string, unknown>;
+          break;
+        }
+        case "extract_text_content": {
+          const texts = extractAllText(roots);
+          result = {
+            app: roots[0]?.package_name || "",
+            screen_resolution: `${roots[0]?.bounds.width}x${roots[0]?.bounds.height}`,
+            total_text_items: texts.length,
+            items: texts,
+            elapsed_ms: Date.now() - start,
+          };
+          break;
+        }
+        case "find_interactive": {
+          const interactive = findInteractiveElements(roots);
+          const total =
+            interactive.clickable.length +
+            interactive.scrollable.length +
+            interactive.input_fields.length +
+            interactive.focusable.length;
+          result = {
+            total_interactive: total,
+            ...interactive,
+            elapsed_ms: Date.now() - start,
+          } as unknown as Record<string, unknown>;
+          break;
+        }
+        default:
+          throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
     }
 
     default:
