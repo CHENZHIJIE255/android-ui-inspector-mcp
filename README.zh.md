@@ -13,8 +13,7 @@
 - **分析** 从高层次理解屏幕内容——提取文本、找交互元素、分析结构
 - **调试** 通过 JDWP 列出可调试进程、转发端口进行深度分析
 
-[![演示预览](assets/demo.gif)](https://github.com/CHENZHIJIE255/android-ui-inspector-mcp/raw/main/assets/demo.mp4)
-*点击 GIF 下载完整演示视频（MP4，6.5 MB）— 或 [在 GitHub 上查看](https://github.com/CHENZHIJIE255/android-ui-inspector-mcp/blob/main/assets/demo.mp4)。*
+![演示 — AI 在真实设备上检查和分析 Android 屏幕](assets/demo.gif)
 
 ## 快速示例
 
