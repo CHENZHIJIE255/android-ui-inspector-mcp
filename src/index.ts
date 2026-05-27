@@ -143,17 +143,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "dump_view_tree",
-      description: "Dump the current Android ViewTree hierarchy via uiautomator. Returns a compact summary (tree structure + stats) safe from truncation. Use find_views to query specific nodes with full attributes. Set detailed=true to get the full raw tree (may truncate on complex screens).",
+      description: "Get an overview of the current screen layout. Returns a compact summary (tree structure + class/state statistics) that is safe from truncation even on complex screens. Use this FIRST to understand the screen structure, then use find_views to query specific nodes with full attributes. Set detailed=true to return the full raw tree (WARNING: full tree can be >200KB on complex screens and may be truncated by the MCP client).",
       inputSchema: {
         type: "object",
         properties: {
           package_name: {
             type: "string",
-            description: "Optional: filter results to only include views from this package.",
+            description: "Optional: filter summary to only include views from this package.",
           },
           detailed: {
             type: "boolean",
-            description: "Set to true to return the full tree with all attributes instead of summary (may truncate on complex screens). Default: false.",
+            description: "If true, returns the FULL tree with ALL attributes for EVERY node. WARNING: full tree can exceed 200KB on complex screens (e.g. launcher, web pages) and may be silently truncated by your MCP client, causing you to miss nodes. Default: false (compact summary, always safe). Recommended: use summary mode + find_views instead.",
           },
           ...DEVICE_SERIAL_PARAM,
           ...LANGUAGE_PARAM,
@@ -163,7 +163,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "find_views",
-      description: "Find Android views matching criteria. All specified conditions are ANDed together. Returns matching views with full attributes. Example: find(text='login', clickable=true) returns clickable buttons with text 'login'.",
+      description: "Query specific Android views by any combination of attributes. Use this to get FULL node attributes (text, bounds, resource_id, etc.) for the nodes you actually care about — unlike dump_view_tree which returns a compact overview. All conditions are ANDed. String fields accept arrays for OR. Example: find_views(clickable=true, has_text=true) returns all clickable buttons and links. Example: find_views(class_name='TextView') returns all text views.",
       inputSchema: FIND_VIEWS_SCHEMA,
     },
     {
