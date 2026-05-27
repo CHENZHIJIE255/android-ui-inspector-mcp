@@ -257,7 +257,7 @@ describe("dumpViewTreeXml", () => {
       .mockReturnValueOnce(undefined);
     const adb = await freshAdb();
     expect(adb.dumpViewTreeXml("abc123")).toBe(fakeXml);
-    const calls = mockExecSync.mock.calls.map((c: [string]) => c[0]);
+    const calls = mockExecSync.mock.calls.map((c) => c[0]);
     expect(calls[1]).toContain("uiautomator dump");
     expect(calls[2]).toContain("cat /sdcard/ui.xml");
     expect(calls[3]).toContain("rm /sdcard/ui.xml");

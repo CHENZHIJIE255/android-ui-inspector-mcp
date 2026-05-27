@@ -281,7 +281,8 @@ export function removeForward(serial, localPort) {
  */
 export function jdwpHandshake(port) {
     return new Promise((resolve) => {
-        const client = createConnection({ port, host: "127.0.0.1" }, () => {
+        const client = createConnection({ port, host: "127.0.0.1" });
+        client.on("connect", () => {
             client.write("JDWP-Handshake");
         });
         client.on("data", (data) => {
