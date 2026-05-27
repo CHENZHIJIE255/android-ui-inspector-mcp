@@ -1,0 +1,27 @@
+{
+  "name": "android-viewtree-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Android ViewTree inspection via ADB + uiautomator, with JDWP support",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "android-viewtree-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "setup": "node bin/setup.mjs",
+    "postinstall": "node bin/check-deps.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.1",
+    "fast-xml-parser": "^5.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "keywords": ["android", "viewtree", "mcp", "adb", "uiautomator", "jdwp"],
+  "license": "MIT"
+}
