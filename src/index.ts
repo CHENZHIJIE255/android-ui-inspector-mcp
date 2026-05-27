@@ -21,7 +21,7 @@ import { findViews } from "./matcher.js";
 import { type Locale, t, detectLocale, listLocales } from "./i18n.js";
 import type { ViewNode, FindParams, ViewTreeResult } from "./types.js";
 
-const SERVER_NAME = "android-viewtree-mcp";
+const SERVER_NAME = "android-ui-inspector-mcp";
 const SERVER_VERSION = "0.1.0";
 
 const server = new Server(

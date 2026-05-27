@@ -11,7 +11,7 @@ import { dumpViewTreeXml, listDebuggableProcesses, forwardJdwp, removeForward, j
 import { parseViewTreeXml } from "./parser.js";
 import { findViews } from "./matcher.js";
 import { t, detectLocale } from "./i18n.js";
-const SERVER_NAME = "android-viewtree-mcp";
+const SERVER_NAME = "android-ui-inspector-mcp";
 const SERVER_VERSION = "0.1.0";
 const server = new Server({ name: SERVER_NAME, version: SERVER_VERSION }, { capabilities: { tools: {} } });
 /**
