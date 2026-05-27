@@ -13,8 +13,8 @@
 - **分析** 从高层次理解屏幕内容——提取文本、找交互元素、分析结构
 - **调试** 通过 JDWP 列出可调试进程、转发端口进行深度分析
 
-<video src="assets/demo.webm" controls width="720" title="AI 在真实设备上检查和分析 Android 屏幕">
-  你的浏览器不支持视频播放。
+<video src="https://github.com/CHENZHIJIE255/android-ui-inspector-mcp/raw/main/assets/demo.webm" controls width="720" title="AI 在真实设备上检查和分析 Android 屏幕">
+  [在 GitHub 上观看演示](https://github.com/CHENZHIJIE255/android-ui-inspector-mcp/raw/main/assets/demo.webm) — 你的浏览器不支持嵌入式视频。
 </video>
 
 ## 快速示例
