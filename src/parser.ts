@@ -30,9 +30,14 @@ export function parseViewTreeXml(xml: string): ViewNode[] {
 /**
  * Parse a single XML node (recursive).
  * / 解析单个 XML 节点（递归）。
+ *
+ * NOTE: fast-xml-parser with attributeNamePrefix: "@_" stores attributes
+ * directly on the xmlNode (e.g. xmlNode["@_class"]), NOT under an "@_" sub-object.
+ * / 注意：fast-xml-parser 将属性直接存在 xmlNode 上（如 xmlNode["@_class"]），
+ * 而不是嵌套在 @_ 子对象下。
  */
 function parseNode(xmlNode: any): ViewNode {
-  const attrs = xmlNode["@_"] || {};
+  const a = xmlNode; // attributes are directly on xmlNode / 属性直接挂在 xmlNode 上
   const children: ViewNode[] = [];
   if (xmlNode.node) {
     const rawChildren = Array.isArray(xmlNode.node) ? xmlNode.node : [xmlNode.node];
@@ -42,23 +47,23 @@ function parseNode(xmlNode: any): ViewNode {
   }
 
   return {
-    index: parseInt(attrs["@_index"], 10) || 0,
-    text: attrs["@_text"] || "",
-    resource_id: attrs["@_resource-id"] || "",
-    class_name: attrs["@_class"] || "",
-    package_name: attrs["@_package"] || "",
-    content_desc: attrs["@_content-desc"] || "",
-    checkable: attrs["@_checkable"] === "true",
-    checked: attrs["@_checked"] === "true",
-    clickable: attrs["@_clickable"] === "true",
-    enabled: attrs["@_enabled"] === "true",
-    focusable: attrs["@_focusable"] === "true",
-    focused: attrs["@_focused"] === "true",
-    scrollable: attrs["@_scrollable"] === "true",
-    long_clickable: attrs["@_long-clickable"] === "true",
-    password: attrs["@_password"] === "true",
-    selected: attrs["@_selected"] === "true",
-    bounds: parseBounds(attrs["@_bounds"] || ""),
+    index: parseInt(a["@_index"], 10) || 0,
+    text: a["@_text"] || "",
+    resource_id: a["@_resource-id"] || "",
+    class_name: a["@_class"] || "",
+    package_name: a["@_package"] || "",
+    content_desc: a["@_content-desc"] || "",
+    checkable: a["@_checkable"] === "true",
+    checked: a["@_checked"] === "true",
+    clickable: a["@_clickable"] === "true",
+    enabled: a["@_enabled"] === "true",
+    focusable: a["@_focusable"] === "true",
+    focused: a["@_focused"] === "true",
+    scrollable: a["@_scrollable"] === "true",
+    long_clickable: a["@_long-clickable"] === "true",
+    password: a["@_password"] === "true",
+    selected: a["@_selected"] === "true",
+    bounds: parseBounds(a["@_bounds"] || ""),
     children,
   };
 }
