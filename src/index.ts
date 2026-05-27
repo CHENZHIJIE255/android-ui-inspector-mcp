@@ -22,7 +22,7 @@ import { type Locale, t, detectLocale, listLocales } from "./i18n.js";
 import type { ViewNode, FindParams, ViewTreeResult } from "./types.js";
 
 const SERVER_NAME = "android-ui-inspector-mcp";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
 
 const server = new Server(
   { name: SERVER_NAME, version: SERVER_VERSION },
@@ -143,13 +143,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
       name: "dump_view_tree",
-      description: "Dump the current Android ViewTree hierarchy via uiautomator. Returns full tree with all attributes (text, bounds, clickable, etc.).",
+      description: "Dump the current Android ViewTree hierarchy via uiautomator. Returns a compact summary (tree structure + stats) safe from truncation. Use find_views to query specific nodes with full attributes. Set detailed=true to get the full raw tree (may truncate on complex screens).",
       inputSchema: {
         type: "object",
         properties: {
           package_name: {
             type: "string",
             description: "Optional: filter results to only include views from this package.",
+          },
+          detailed: {
+            type: "boolean",
+            description: "Set to true to return the full tree with all attributes instead of summary (may truncate on complex screens). Default: false.",
           },
           ...DEVICE_SERIAL_PARAM,
           ...LANGUAGE_PARAM,
@@ -191,6 +195,93 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
   ],
 }));
+
+/**
+ * Walk tree and collect summary stats, returning a compact view for AI consumption
+ * (avoids truncation from huge full-tree JSON).
+ * / 遍历树、收集摘要统计，返回紧凑视图供 AI 使用（避免全量 JSON 被截断）。
+ */
+interface TreeSummary {
+  app: string;
+  screen_resolution: string;
+  total_nodes: number;
+  max_depth: number;
+  elapsed_ms: number;
+  class_summary: Record<string, number>;
+  stats: Record<string, number>;
+  tree: string[];
+}
+
+function summarizeTree(roots: ViewNode[]): TreeSummary {
+  let totalNodes = 0;
+  let maxDepth = 0;
+  const classCount: Record<string, number> = {};
+  const stats: Record<string, number> = {
+    clickable: 0, enabled: 0, scrollable: 0,
+    has_text: 0, has_content_desc: 0, has_resource_id: 0,
+  };
+  const apps = new Set<string>();
+  let screenRes = "";
+
+  // First pass: count ALL nodes (full traversal without truncation)
+  // / 第一遍：完整遍历全部节点，精确统计
+  function countAll(nodes: ViewNode[], depth: number) {
+    for (const n of nodes) {
+      totalNodes++;
+      maxDepth = Math.max(maxDepth, depth);
+      classCount[n.class_name] = (classCount[n.class_name] || 0) + 1;
+      if (n.clickable) stats.clickable++;
+      if (n.enabled) stats.enabled++;
+      if (n.scrollable) stats.scrollable++;
+      if (n.text) stats.has_text++;
+      if (n.content_desc) stats.has_content_desc++;
+      if (n.resource_id) stats.has_resource_id++;
+      if (n.package_name) apps.add(n.package_name);
+      if (depth === 0) screenRes = `${n.bounds.width}x${n.bounds.height}`;
+      if (n.children) countAll(n.children, depth + 1);
+    }
+  }
+  countAll(roots, 0);
+
+  // Second pass: build compact tree lines (truncated for readability)
+  // / 第二遍：生成紧凑树形展示（适当截断避免过长）
+  const treeLines: string[] = [];
+
+  const MAX_TREE_LINES = 40;
+
+  function buildTree(nodes: ViewNode[], depth: number, prefix: string) {
+    for (let i = 0; i < nodes.length; i++) {
+      if (treeLines.length >= MAX_TREE_LINES) return;
+      const n = nodes[i];
+
+      const rid = n.resource_id ? ` (${n.resource_id})` : "";
+      const info = n.text ? ` text="${n.text.slice(0, 30)}"` : "";
+      treeLines.push(`${prefix}${n.class_name}${rid}${info}`);
+
+      if (n.children?.length) {
+        const shown = n.children.slice(0, 3);
+        buildTree(shown, depth + 1, prefix + "  ");
+        if (treeLines.length >= MAX_TREE_LINES) return;
+        if (n.children.length > 3) {
+          treeLines.push(`${prefix}  ... (${n.children.length - 3} more)`);
+        }
+      }
+    }
+  }
+
+  buildTree(roots, 0, "");
+
+  return {
+    app: apps.size === 1 ? [...apps][0] : apps.size > 1 ? `${apps.size} apps` : "(none)",
+    screen_resolution: screenRes,
+    total_nodes: totalNodes,
+    max_depth: maxDepth,
+    elapsed_ms: 0,
+    class_summary: classCount,
+    stats,
+    tree: treeLines,
+  };
+}
 
 /**
  * Core query pipeline: dump view tree XML -> parse -> filter by params.
@@ -247,9 +338,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const params: FindParams = {};
       if (pkgFilter) params.package_name = pkgFilter;
       if (dumpSerial) params.device_serial = dumpSerial;
-      const result = await queryViewTree(params, dumpSerial, lang);
+
+      // Always fetch full tree for summary (filter applied in summary if package_name given)
+      const start = Date.now();
+      const xml = dumpViewTreeXml(dumpSerial);
+      const roots = parseViewTreeXml(xml);
+      if (roots.length === 0) {
+        return { content: [{ type: "text", text: JSON.stringify({ error: t(lang, "viewtree.no_root") }) }] };
+      }
+
+      const filtered = pkgFilter
+        ? findViews(roots, { package_name: pkgFilter })
+        : roots;
+
+      if (dumpArgs.detailed === true) {
+        // Full tree mode (liable to truncation on complex screens)
+        const result: ViewTreeResult = { nodes: filtered, total_count: filtered.length, elapsed_ms: Date.now() - start };
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      }
+
+      // Summary mode (default) — compact, AI-friendly, never truncated
+      const summary = summarizeTree(filtered);
+      summary.elapsed_ms = Date.now() - start;
       return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
       };
     }
 
