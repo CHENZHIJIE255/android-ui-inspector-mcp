@@ -79,9 +79,9 @@ function matches(node: ViewNode, params: FindParams): boolean {
   if (params.scrollable !== undefined && node.scrollable !== params.scrollable) return false;
 
   // has_* boolean fields — check for non-empty string / has_* 布尔字段——检查字符串非空
-  if (params.has_text !== undefined && (node.text === "") !== params.has_text) return false;
-  if (params.has_content_desc !== undefined && (node.content_desc === "") !== params.has_content_desc) return false;
-  if (params.has_resource_id !== undefined && (node.resource_id === "") !== params.has_resource_id) return false;
+  if (params.has_text !== undefined && (node.text === "") === params.has_text) return false;
+  if (params.has_content_desc !== undefined && (node.content_desc === "") === params.has_content_desc) return false;
+  if (params.has_resource_id !== undefined && (node.resource_id === "") === params.has_resource_id) return false;
 
   // Cross-field $or — at least one sub-query must match
   // 跨字段 $or —— 至少一个子查询匹配

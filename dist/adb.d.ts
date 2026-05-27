@@ -17,14 +17,20 @@ export declare function findActiveDevice(locale?: Locale): string | undefined;
 /**
  * Ensure ADB is available and a serial is selected.
  * If serial not provided, auto-detect and cache.
+ * If serial is explicitly provided, validate but DON'T update cache
+ * (avoids cross-agent interference when multiple agents share one MCP server).
  * Returns the resolved serial or throws.
  * / 确保 ADB 可用且已选择设备序列号。若未提供则自动检测并缓存。
+ *   若显式传了 serial，只做校验不改缓存，避免多 agent 共享 MCP 进程时串号。
  */
 export declare function ensureAdbAvailable(serial?: string, locale?: Locale): string;
 /**
  * Explicitly select (or switch to) a specific device by serial.
  * Validates the device is in "device" state before switching.
+ * NOTE: This DOES update the cache (intentionally — its purpose is to switch).
+ * Most callers should use ensureAdbAvailable(serial) instead.
  * / 显式切换到一个指定序列号的设备。切换前会验证设备状态为 "device"。
+ *   注意：这会修改缓存（切换设备本就是目的）。大多数调用方应改用 ensureAdbAvailable(serial)。
  */
 export declare function selectDevice(serial: string, locale?: Locale): void;
 /**
@@ -52,9 +58,12 @@ export declare function getActiveDeviceSerial(): string | undefined;
 export declare function dumpViewTreeXml(serial?: string): string;
 /**
  * List JDWP process IDs from `adb jdwp`.
- * / 通过 `adb jdwp` 列出 JDWP 进程 ID。
+ *
+ * `adb jdwp` never terminates — it streams PIDs continuously.
+ * Use spawn + quiet-period flush: collect the initial batch, then kill after idle.
+ * / `adb jdwp` 不会退出，持续推送 PID。使用 spawn + 静默超时策略收集首批 PID。
  */
-export declare function listJdwpPids(serial?: string): number[];
+export declare function listJdwpPids(serial?: string): Promise<number[]>;
 /**
  * Get the package name for a PID via /proc/<pid>/cmdline.
  * / 通过 /proc/<pid>/cmdline 获取进程 ID 对应的包名。
@@ -64,10 +73,10 @@ export declare function getPackageName(serial: string, pid: number): string | un
  * List all debuggable processes on the device (from `adb jdwp` + cmdline).
  * / 列出设备上所有可调试的进程（通过 `adb jdwp` + cmdline）。
  */
-export declare function listDebuggableProcesses(serial?: string): Array<{
+export declare function listDebuggableProcesses(serial?: string): Promise<Array<{
     pid: number;
     package_name?: string;
-}>;
+}>>;
 /**
  * Forward a local TCP port to a JDWP process via ADB.
  * Returns the serial used and local port for cleanup / handshake.

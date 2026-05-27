@@ -270,7 +270,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       try {
         const listArgs = (args ?? {}) as Record<string, unknown>;
         const listSerial = listArgs.device_serial as string | undefined;
-        const processes = listDebuggableProcesses(listSerial);
+        const processes = await listDebuggableProcesses(listSerial);
         return {
           content: [{ type: "text", text: JSON.stringify(processes, null, 2) }],
         };

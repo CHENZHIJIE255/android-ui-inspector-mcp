@@ -2,7 +2,7 @@
  * ADB layer: device detection, shell commands, JDWP operations.
  * / ADB 层：设备检测、Shell 命令、JDWP 操作。
  */
-import { execSync } from "child_process";
+import { execSync, spawn } from "child_process";
 import { createConnection } from "net";
 import { platform } from "os";
 import { t, detectLocale } from "./i18n.js";
@@ -52,13 +52,18 @@ export function findActiveDevice(locale) {
 /**
  * Ensure ADB is available and a serial is selected.
  * If serial not provided, auto-detect and cache.
+ * If serial is explicitly provided, validate but DON'T update cache
+ * (avoids cross-agent interference when multiple agents share one MCP server).
  * Returns the resolved serial or throws.
  * / 确保 ADB 可用且已选择设备序列号。若未提供则自动检测并缓存。
+ *   若显式传了 serial，只做校验不改缓存，避免多 agent 共享 MCP 进程时串号。
  */
 export function ensureAdbAvailable(serial, locale) {
     const lang = locale ?? detectLocale();
     if (serial) {
-        selectDevice(serial, lang);
+        // Validate but DON'T update cache — explicit serial is per-call
+        // / 只校验不改缓存 — 显式 serial 每次独立
+        validateDevice(serial, lang);
         return serial;
     }
     if (_deviceSerial)
@@ -71,9 +76,34 @@ export function ensureAdbAvailable(serial, locale) {
     return _deviceSerial;
 }
 /**
+ * Validate that a device serial is reachable and in "device" state, without touching cache.
+ * / 验证设备可达且状态为 "device"，不改缓存。
+ */
+function validateDevice(serial, locale) {
+    try {
+        const out = execSync("adb devices -l", { encoding: "utf-8" });
+        const lines = out.split("\n").slice(1);
+        const found = lines.some(line => {
+            const parts = line.trim().split(/\s+/);
+            return parts[0] === serial && parts[1] === "device";
+        });
+        if (!found) {
+            throw new Error(t(locale, "device.invalid_state", { serial }));
+        }
+    }
+    catch (e) {
+        if (e.message?.includes?.(t(locale, "device.invalid_state", { serial }).slice(0, 10)))
+            throw e;
+        throw new Error(t(locale, "device.validate_failed", { serial, reason: e.message || String(e) }));
+    }
+}
+/**
  * Explicitly select (or switch to) a specific device by serial.
  * Validates the device is in "device" state before switching.
+ * NOTE: This DOES update the cache (intentionally — its purpose is to switch).
+ * Most callers should use ensureAdbAvailable(serial) instead.
  * / 显式切换到一个指定序列号的设备。切换前会验证设备状态为 "device"。
+ *   注意：这会修改缓存（切换设备本就是目的）。大多数调用方应改用 ensureAdbAvailable(serial)。
  */
 export function selectDevice(serial, locale) {
     const lang = locale ?? detectLocale();
@@ -141,15 +171,53 @@ export function dumpViewTreeXml(serial) {
 }
 /**
  * List JDWP process IDs from `adb jdwp`.
- * / 通过 `adb jdwp` 列出 JDWP 进程 ID。
+ *
+ * `adb jdwp` never terminates — it streams PIDs continuously.
+ * Use spawn + quiet-period flush: collect the initial batch, then kill after idle.
+ * / `adb jdwp` 不会退出，持续推送 PID。使用 spawn + 静默超时策略收集首批 PID。
  */
 export function listJdwpPids(serial) {
     const resolvedSerial = ensureAdbAvailable(serial);
-    const out = execSync(`adb -s ${resolvedSerial} jdwp`, { encoding: "utf-8" });
-    return out
-        .split("\n")
-        .map(line => parseInt(line.trim(), 10))
-        .filter(pid => !isNaN(pid));
+    return new Promise((resolve, reject) => {
+        const child = spawn("adb", ["-s", resolvedSerial, "jdwp"], {
+            stdio: ["ignore", "pipe", "pipe"],
+        });
+        let data = "";
+        let flushTimer = null;
+        const flush = () => {
+            if (flushTimer)
+                clearTimeout(flushTimer);
+            if (!child.killed)
+                child.kill();
+            const pids = data
+                .split("\n")
+                .map(line => parseInt(line.trim(), 10))
+                .filter(pid => !isNaN(pid));
+            resolve(pids);
+        };
+        child.stdout.on("data", (chunk) => {
+            data += chunk.toString("utf-8");
+            if (flushTimer)
+                clearTimeout(flushTimer);
+            flushTimer = setTimeout(flush, 300); // flush 300ms after last data / 最后一批数据后 300ms 关闭
+        });
+        child.stderr.on("data", () => {
+            // ignore stderr
+        });
+        child.on("error", (err) => {
+            if (flushTimer)
+                clearTimeout(flushTimer);
+            reject(new Error(`adb jdwp failed: ${err.message}`));
+        });
+        child.on("close", () => {
+            flush();
+        });
+        // Safety: force flush after 3s even if data keeps streaming (e.g. app restart spam)
+        // / 兜底：3s 后强制关闭，防止数据持续流（如频繁重启调试进程）
+        setTimeout(() => {
+            flush();
+        }, 3000);
+    });
 }
 /**
  * Get the package name for a PID via /proc/<pid>/cmdline.
@@ -170,9 +238,9 @@ export function getPackageName(serial, pid) {
  * List all debuggable processes on the device (from `adb jdwp` + cmdline).
  * / 列出设备上所有可调试的进程（通过 `adb jdwp` + cmdline）。
  */
-export function listDebuggableProcesses(serial) {
+export async function listDebuggableProcesses(serial) {
     const resolvedSerial = ensureAdbAvailable(serial);
-    const pids = listJdwpPids(resolvedSerial);
+    const pids = await listJdwpPids(resolvedSerial);
     return pids.map(pid => ({
         pid,
         package_name: getPackageName(resolvedSerial, pid),

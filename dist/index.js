@@ -249,7 +249,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             try {
                 const listArgs = (args ?? {});
                 const listSerial = listArgs.device_serial;
-                const processes = listDebuggableProcesses(listSerial);
+                const processes = await listDebuggableProcesses(listSerial);
                 return {
                     content: [{ type: "text", text: JSON.stringify(processes, null, 2) }],
                 };
