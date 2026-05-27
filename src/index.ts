@@ -36,7 +36,7 @@ const server = new Server(
 const DEVICE_SERIAL_PARAM = {
   device_serial: {
     type: "string",
-    description: "Target a specific device serial. If omitted, auto-selects the first connected device. Use list_debuggable_processes to see available devices. / 目标设备序列号，省略时自动选择。",
+    description: "Target a specific device serial. Each call is independent — you can freely switch between different devices across calls without any disconnect/connect step. If omitted, auto-selects the first connected device. Use list_debuggable_processes to see available devices. / 目标设备序列号。每次调用独立，可在不同调用间自由切换不同设备，无需中断或重连。省略时自动选择第一个在线设备。",
   },
 };
 
