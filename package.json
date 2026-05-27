@@ -1,11 +1,11 @@
 {
-  "name": "android-viewtree-mcp",
+  "name": "android-ui-inspector-mcp",
   "version": "0.1.0",
-  "description": "MCP server for Android ViewTree inspection via ADB + uiautomator, with JDWP support",
+  "description": "MCP tool that lets AI agents inspect Android UI — dump view trees, find elements by text/class/id, connect JDWP for debugging",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "android-viewtree-mcp": "./dist/index.js"
+    "android-ui-inspector-mcp": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -22,6 +22,6 @@
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
   },
-  "keywords": ["android", "viewtree", "mcp", "adb", "uiautomator", "jdwp"],
+  "keywords": ["android", "ui-inspector", "mcp", "adb", "uiautomator", "jdwp", "view-tree"],
   "license": "MIT"
 }

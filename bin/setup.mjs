@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Cross-platform setup script for android-viewtree-mcp.
+ * Cross-platform setup script for android-ui-inspector-mcp.
  *
  * 1. Checks prerequisites (Node.js, ADB)
  * 2. Builds the project
@@ -176,7 +176,7 @@ function registerMcp() {
   // Ensure mcp section exists
   if (!config.mcp) config.mcp = {};
 
-  config.mcp["android-viewtree"] = {
+  config.mcp["android-ui-inspector"] = {
     command: [
       "node",
       normalizedPath,
@@ -207,7 +207,7 @@ function tryNpmLink() {
   log("LINK", "Attempting npm link... / 尝试 npm link...");
   try {
     execSync("npm link", { cwd: PROJECT_ROOT, stdio: ["pipe", "pipe", "pipe"] });
-    log("LINK", `${green("✓")} npm link successful — server is globally available as ${yellow("android-viewtree-mcp")}`);
+    log("LINK", `${green("✓")} npm link successful — server is globally available as ${yellow("android-ui-inspector-mcp")}`);
     return true;
   } catch (e) {
     const msg = e.stderr?.toString() || e.message || "";
@@ -232,7 +232,7 @@ function printInstructions(linked) {
   console.log(``);
 
   if (linked) {
-    console.log(`  ${green("✓")} Server globally available as ${yellow("android-viewtree-mcp")}`);
+    console.log(`  ${green("✓")} Server globally available as ${yellow("android-ui-inspector-mcp")}`);
   } else {
     console.log(`  ${green("1.")} (Optional) Make server globally available:`);
     console.log(`     ${yellow("sudo npm link")}`);
@@ -261,7 +261,7 @@ function normalizedPathForDisplay() {
 // ────────────────────────────────────
 // Main
 // ────────────────────────────────────
-console.log(`\n${cyan("android-viewtree-mcp")} setup / 安装向导\n`);
+console.log(`\n${cyan("android-ui-inspector-mcp")} setup / 安装向导\n`);
 
 checkNode();
 checkAdb();
