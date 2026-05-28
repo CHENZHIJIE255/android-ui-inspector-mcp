@@ -55,8 +55,21 @@ export interface SnapshotNode {
   null?: boolean;
 }
 
+export interface ThreadInfo {
+  id: string;
+  name: string;
+  frames: string[];
+}
+
+export interface DiagnosticInfo {
+  threads: ThreadInfo[];
+  mainThreadFrames: string[];
+  objectHash: string;
+}
+
 export interface SnapshotResult {
   root: SnapshotNode;
+  diagnostics?: DiagnosticInfo;
   elapsed: number;
 }
 
@@ -72,181 +85,132 @@ export class ObjectInspector {
     this.maxDepth = maxDepth;
   }
 
-  /** Check if a class (by refTypeId) is a subclass of android.app.Activity */
-  private async isActivitySubclass(typeId: bigint): Promise<boolean> {
-    let current: bigint | null = typeId;
-    while (current !== null) {
-      const sig = await this.conn.referenceTypeSignature(current);
-      if (sig === "Landroid/app/Activity;") return true;
-      if (sig === "Ljava/lang/Object;") break;
-      current = await this.conn.classTypeSuperclass(current);
-    }
-    return false;
-  }
-
-  /** Read ActivityClientRecord fields as a SnapshotNode (ART fallback).
-   *  On ART, getValues on Activity subclass instances hangs, so we read
-   *  the Activity's state through the ActivityClientRecord instead. */
-  private async acrSnapshot(jniSig: string): Promise<SnapshotNode> {
-    // Walk chain to find ActivityClientRecord
-    const atObjId = await this.conn.artFindActivityThreadInstance();
-    if (atObjId === null) throw new Error("Cannot find ActivityThread on ART");
-
-    const atClasses = await this.conn.classesBySignature("Landroid/app/ActivityThread;");
-    const mActivitiesField = (await this.conn.referenceTypeFields(atClasses[0].typeId))
-      .find(f => f.name === "mActivities");
-    if (!mActivitiesField) throw new Error("No mActivities field on ActivityThread");
-
-    const [mActVal] = await this.conn.getValues(atObjId, [mActivitiesField.fieldId]);
-    if (mActVal.tag !== "object" || mActVal.objectId === null)
-      throw new Error("mActivities is null");
-
-    const amRefType = await this.conn.objectReferenceType(mActVal.objectId);
-    const amAllFields = await this.conn.allFields(amRefType.typeId);
-    const mArrayField = amAllFields.find(f => f.name === "mArray");
-    const mSizeField = amAllFields.find(f => f.name === "mSize");
-    if (!mArrayField || !mSizeField) throw new Error("ArrayMap has no mArray/mSize");
-
-    const [arrVal, sizeVal] = await this.conn.getValues(mActVal.objectId,
-      [mArrayField.fieldId, mSizeField.fieldId]);
-    if (arrVal.tag !== "array" || arrVal.objectId === null || sizeVal.tag !== "int")
-      throw new Error("Cannot read ArrayMap contents");
-
-    // Read array elements to find ActivityClientRecord
-    const arrLen = await this.conn.arrayLength(arrVal.objectId);
-    const arrData = await this.conn.arrayValues(arrVal.objectId, 0, Math.min(arrLen, 50));
-    let acrObjId: bigint | null = null;
-    let actObjId: bigint | null = null;
-    for (const elem of arrData) {
-      if (elem.tag !== "object" || elem.objectId === null) continue;
-      try {
-        const rt = await this.conn.objectReferenceType(elem.objectId);
-        const rsig = await this.conn.referenceTypeSignature(rt.typeId);
-        if (rsig.includes("ActivityClientRecord") || rsig.includes("ActivityRecord")) {
-          acrObjId = elem.objectId;
-          // Read the 'activity' field to get the target Activity instance
-          const recFields = await this.conn.allFields(rt.typeId);
-          const actField = recFields.find(f => f.name === "activity");
-          if (actField) {
-            const [actVal] = await this.conn.getValues(acrObjId, [actField.fieldId]);
-            if (actVal.tag === "object" && actVal.objectId !== null) {
-              const actRt = await this.conn.objectReferenceType(actVal.objectId);
-              const actSig = await this.conn.referenceTypeSignature(actRt.typeId);
-              if (actSig === jniSig) actObjId = actVal.objectId;
-            }
-          }
-          break;
-        }
-      } catch { /* skip non-ACR elements */ }
-    }
-
-    if (acrObjId === null) throw new Error("No ActivityClientRecord found");
-
-    // Read ACR fields (these work on ART — confirmed by testing)
-    const acrType = await this.conn.objectReferenceType(acrObjId);
-    const acrFields = await this.conn.allFields(acrType.typeId);
-    const readable = acrFields.filter(f => !f.name.startsWith("$") && f.name !== "serialVersionUID");
-
-    const fieldMap: Record<string, SnapshotNode> = {};
-    const BATCH = 30;
-    for (let bs = 0; bs < readable.length; bs += BATCH) {
-      const batch = readable.slice(bs, bs + BATCH);
-      const vals = await this.conn.getValues(acrObjId, batch.map(f => f.fieldId));
-      for (let i = 0; i < batch.length; i++) {
-        const v = vals[i];
-        fieldMap[batch[i].name] = { className: "unknown", objectId: "0", value: formatJdwpValue(v) };
-        // Quick type resolution for object refs (avoid recursion to prevent hangs)
-        if (isObjectRef(v) && v.objectId !== null) {
-          try {
-            const vt = await this.conn.objectReferenceType(v.objectId);
-            const vs = await this.conn.referenceTypeSignature(vt.typeId);
-            fieldMap[batch[i].name] = {
-              className: jniToClassName(vs),
-              objectId: v.objectId.toString(),
-            };
-          } catch { /* keep simple format */ }
-        }
-      }
-    }
-
-    // Add defer-to-ACR note for the Activity reference
-    if (actObjId !== null) {
-      fieldMap["_activity_object"] = {
-        className: "com.example.test.MainActivity (ART: getValues hangs, see ACR fields)",
-        objectId: actObjId.toString(),
-        value: "(fields not readable on ART, use ACR fields above)",
-      };
-    }
-
-    return {
-      className: "android.app.ActivityThread$ActivityClientRecord (ART fallback)",
-      objectId: acrObjId.toString(),
-      fields: fieldMap,
-    };
-  }
-
   async snapshot(className: string, path: string): Promise<SnapshotResult> {
     const start = Date.now();
     const jniSig = "L" + className.replace(/\./g, "/") + ";";
 
+    // Find the target class and instance
     const classes = await this.conn.classesBySignature(jniSig);
     if (classes.length === 0) throw new Error(`class ${className} not found`);
 
     let instances: bigint[] = [];
-    try {
-      instances = await this.conn.instances(classes[0].typeId, 1);
-    } catch {}
-    let artFallbackUsed = false;
+    // Suspend VM minimally — only when we know we need object-level reads
+    let suspended = false;
+    if (path) {
+      // Path-based: suspend, resolve, resume
+      try { instances = await this.conn.instances(classes[0].typeId, 1); } catch {}
+      if (instances.length === 0) {
+        await this.conn.suspendVm(); suspended = true;
+        const activityMap = await this.conn.artFindActivityInstances();
+        const bySig = activityMap.get(jniSig);
+        if (bySig && bySig.length > 0) instances = bySig;
+      }
+      if (instances.length === 0) throw new Error(`no instances of ${className} found`);
+      if (!suspended) { await this.conn.suspendVm(); suspended = true; }
+      try {
+        const segs = parsePath(path);
+        const val = await this.resolve(instances[0], segs, 0);
+        const root = await this.valueToNode(val);
+        return { root, elapsed: Date.now() - start };
+      } finally {
+        try { this.conn.resumeVm(); } catch {}
+      }
+    }
 
-    // Suspend VM early for ART fallback to prevent GC invalidating object IDs
+    // No path: fast snapshot of declared fields + diagnostics
+    // Step 1: Find instance (no VM suspension needed for type queries)
+    try { instances = await this.conn.instances(classes[0].typeId, 1); } catch {}
     if (instances.length === 0) {
-      await this.conn.suspendVm();
-      artFallbackUsed = true;
+      // ART fallback — suspend once, do all reads, resume
+      await this.conn.suspendVm(); suspended = true;
       try {
         const activityMap = await this.conn.artFindActivityInstances();
         const bySig = activityMap.get(jniSig);
-        if (bySig && bySig.length > 0) {
-          instances = bySig;
-        }
-      } catch {
-        // fallback failed, will throw below
-      }
+        if (bySig && bySig.length > 0) instances = bySig;
+      } catch {}
     }
+    if (instances.length === 0) throw new Error(`no instances of ${className} found`);
 
-    if (instances.length === 0) {
-      if (artFallbackUsed) { try { this.conn.resumeVm(); } catch {} }
-      throw new Error(`no instances of ${className} found. Try an Activity class name.`);
-    }
+    if (!suspended) await this.conn.suspendVm();
 
-    if (!artFallbackUsed) {
-      await this.conn.suspendVm();
-    }
-
-    let root: SnapshotNode;
     try {
-      const segs = parsePath(path);
-      if (segs.length === 0) {
-        // Check if this is an Activity subclass — if so, use ACR fallback
-        // because getValues on Activity objects hangs on ART
-        if (artFallbackUsed) {
-          const isActivity = await this.isActivitySubclass(classes[0].typeId);
-          if (isActivity) {
-            root = await this.acrSnapshot(jniSig);
-          } else {
-            root = await this.objectToNode(instances[0]);
+      const objId = instances[0];
+      const typeInfo = await this.conn.objectReferenceType(objId);
+      const sig = await this.conn.referenceTypeSignature(typeInfo.typeId);
+      const cn = jniToClassName(sig);
+
+      // Read ONLY declared fields (not allFields which triggers ANR from 437 fields)
+      const allDeclared = await this.conn.referenceTypeFields(typeInfo.typeId);
+      const readableFields = allDeclared.filter(
+        f => !f.name.startsWith("$") && f.name !== "serialVersionUID"
+      );
+
+      const fieldMap: Record<string, SnapshotNode> = {};
+      const BATCH = 30;
+      for (let bs = 0; bs < readableFields.length; bs += BATCH) {
+        const batch = readableFields.slice(bs, bs + BATCH);
+        const vals = await this.conn.getValues(objId, batch.map(f => f.fieldId));
+        for (let i = 0; i < batch.length; i++) {
+          const fn = batch[i].name;
+          if (i < vals.length) {
+            fieldMap[fn] = await this.valueToNode(vals[i]);
           }
-        } else {
-          root = await this.objectToNode(instances[0]);
         }
-      } else {
-        const val = await this.resolve(instances[0], segs, 0);
-        root = await this.valueToNode(val);
       }
+
+      const root: SnapshotNode = { className: cn, objectId: objId.toString(), fields: fieldMap };
+
+      // Collect diagnostics (threads, stacks)
+      const diagnostics = await this.collectDiagnostics(objId);
+
+      return { root, diagnostics, elapsed: Date.now() - start };
     } finally {
-      try { this.conn.resumeVm(); } catch { }
+      try { this.conn.resumeVm(); } catch {}
+    }
+  }
+
+  /** Collect diagnostic context from the suspended VM:
+   *  thread list, main thread stack trace, and object identity hash. */
+  private async collectDiagnostics(objId: bigint): Promise<DiagnosticInfo> {
+    const threads = await this.conn.allThreads();
+    const threadList: ThreadInfo[] = [];
+    let mainThreadFrames: string[] = [];
+
+    for (let i = 0; i < threads.length; i++) {
+      const tid = threads[i];
+      let name = "";
+      try { name = await this.conn.threadName(tid); } catch { name = `thread_${tid}`; }
+
+      // Get first 5 stack frames for each thread
+      let frames: string[] = [];
+      try {
+        const rawFrames = await this.conn.threadFrames(tid, 0, 5);
+        frames = await Promise.all(rawFrames.map(async (f) => {
+          let clsName = "?";
+          try {
+            const sig = await this.conn.referenceTypeSignature(f.location.typeId);
+            clsName = jniToClassName(sig);
+          } catch {}
+          return `${clsName} methodIndex=${f.location.methodIndex}`;
+        }));
+      } catch { frames = ["(frames unavailable)"]; }
+
+      threadList.push({ id: tid.toString(), name, frames });
+
+      // Track main thread separately
+      if (name === "main" || name.includes("main")) {
+        mainThreadFrames = frames;
+      }
     }
 
-    return { root, elapsed: Date.now() - start };
+    // Read object identity hash via JDWP — use reference type signature as proxy
+    let objHash = "";
+    try {
+      const info = await this.conn.objectReferenceType(objId);
+      objHash = `refTypeId=${info.typeId} tag=${info.refTypeTag}`;
+    } catch { objHash = "(unavailable)"; }
+
+    return { threads: threadList, mainThreadFrames, objectHash: objHash };
   }
 
   private async resolve(objId: bigint, segs: Seg[], i: number): Promise<JdwpValue> {
@@ -282,11 +246,9 @@ export class ObjectInspector {
   }
 
   private async readField(objId: bigint, name: string): Promise<JdwpValue> {
-    const typeInfo = await this.conn.objectReferenceType(objId);
-    const fields = await this.cachedFields(typeInfo.typeId);
-    const f = fields.find(fi => fi.name === name);
-    if (!f) return { tag: "void" };
-    const vals = await this.conn.getValues(objId, [f.fieldId]);
+    const hierarchy = await this.findFieldInHierarchy(objId, name);
+    if (!hierarchy) return { tag: "void" };
+    const vals = await this.conn.getValues(objId, [hierarchy.field.fieldId]);
     return vals[0];
   }
 
@@ -331,6 +293,12 @@ export class ObjectInspector {
     if (val.tag === "void") return { className: "void", objectId: "0", null: true };
     const prim = primValue(val);
     if (prim !== undefined) return { className: typeTag(val), objectId: "0", value: prim };
+    if (val.tag === "string") {
+      if (val.objectId === null) return { className: "null", objectId: "0", null: true };
+      let str = "(string)";
+      try { str = await this.conn.stringValue(val.objectId); } catch {}
+      return { className: "java.lang.String", objectId: val.objectId.toString(), value: str };
+    }
     if ((val.tag === "object" || val.tag === "array") && val.objectId === null) {
       return { className: "null", objectId: "0", null: true };
     }
@@ -360,8 +328,8 @@ export class ObjectInspector {
       return { className, objectId: key, value: "(string)" };
     }
 
-    const fields = await this.cachedFields(typeInfo.typeId);
-    // Read field values in batches to avoid ART choking on large requests
+    const allFields = await this.cachedFields(typeInfo.typeId);
+    const fields = allFields.filter(f => !f.name.startsWith("$") && f.name !== "serialVersionUID");
     const BATCH = 30;
     const fieldMap: Record<string, SnapshotNode> = {};
     for (let batchStart = 0; batchStart < fields.length; batchStart += BATCH) {
@@ -370,7 +338,6 @@ export class ObjectInspector {
       const vals = await this.conn.getValues(objId, ids);
       for (let i = 0; i < batch.length; i++) {
         const fn = batch[i].name;
-        if (fn.startsWith("$") || fn === "serialVersionUID") continue;
         if (i < vals.length) {
           fieldMap[fn] = await this.valueToNode(vals[i]);
         }
@@ -381,12 +348,30 @@ export class ObjectInspector {
     return { className, objectId: key, fields: fieldMap };
   }
 
+  /** Read declared fields only. Walks the superclass chain on demand
+   *  only when a named field is not found in the direct type. */
   private async cachedFields(typeId: bigint): Promise<FieldInfo[]> {
     const key = typeId.toString();
     if (!this.fieldCache.has(key)) {
-      this.fieldCache.set(key, await this.conn.allFields(typeId));
+      this.fieldCache.set(key, await this.conn.referenceTypeFields(typeId));
     }
     return this.fieldCache.get(key)!;
+  }
+
+  /** Find a field by name, checking the type hierarchy.
+   *  Returns the declaring class's typeId and the field info, or null. */
+  private async findFieldInHierarchy(objId: bigint, name: string): Promise<{ typeId: bigint; field: FieldInfo } | null> {
+    const typeInfo = await this.conn.objectReferenceType(objId);
+    let currentId: bigint | null = typeInfo.typeId;
+    while (currentId !== null) {
+      const fields = await this.conn.referenceTypeFields(currentId);
+      const found = fields.find(f => f.name === name);
+      if (found) return { typeId: currentId, field: found };
+      const sig = await this.conn.referenceTypeSignature(currentId);
+      if (sig === "Ljava/lang/Object;") break;
+      currentId = await this.conn.classTypeSuperclass(currentId);
+    }
+    return null;
   }
 }
 

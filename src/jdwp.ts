@@ -112,6 +112,13 @@ export class JdwpConnection {
     });
   }
 
+  /** Proper VM-level disconnect: send Dispose then close.
+   *  Sending Dispose (CommandSet=1, Command=10) tells ART to release
+   *  JDWP resources cleanly. Without it, the app may crash on socket close. */
+  async dispose(): Promise<void> {
+    try { await this.sendCommand(1, 10); } catch {}
+  }
+
   disconnect(): void {
     this.socket?.end();
     this.socket?.destroy();
@@ -441,6 +448,14 @@ export class JdwpConnection {
       } catch {}
     }
     return result;
+  }
+
+  /** Read the content of a String object. CommandSet=10, Command=1 */
+  async stringValue(stringObjectId: bigint): Promise<string> {
+    const data = Buffer.alloc(this.sizes.objectID);
+    this.writeId(data, 0, stringObjectId, this.sizes.objectID);
+    const reply = await this.sendCommand(10, 1, data);
+    return this.decodeString(reply, 0);
   }
 
   /** Get the JNI signature of a reference type. CommandSet=2, Command=1 */
