@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * MCP server entry point for android-viewtree-mcp.
- * Defines 4 tools: dump_view_tree, find_views, list_debuggable_processes, jdwp_connect.
- * / MCP 服务器入口。注册 dump_view_tree、find_views、list_debuggable_processes、jdwp_connect 四个工具。
+ * MCP server entry point for android-scope-mcp.
+ * Registers view-tree, JDWP, memory inspection, tap, and correlate tools.
  */
 
+import { execSync } from "child_process";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -15,13 +15,15 @@ import {
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 
-import { dumpViewTreeXml, listDebuggableProcesses, forwardJdwp, removeForward, jdwpHandshake, getPackageName, selectDevice } from "./adb.js";
+import { dumpViewTreeXml, listDebuggableProcesses, forwardJdwp, removeForward, jdwpHandshake, getPackageName, selectDevice, ensureAdbAvailable } from "./adb.js";
 import { parseViewTreeXml } from "./parser.js";
 import { findViews } from "./matcher.js";
 import { type Locale, t, detectLocale, listLocales } from "./i18n.js";
 import type { ViewNode, Bounds, FindParams, ViewTreeResult } from "./types.js";
+import { JdwpConnection } from "./jdwp.js";
+import { ObjectInspector } from "./inspector.js";
 
-const SERVER_NAME = "android-ui-inspector-mcp";
+const SERVER_NAME = "android-scope-mcp";
 const SERVER_VERSION = "0.2.0";
 
 const server = new Server(
@@ -235,6 +237,76 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           ...DEVICE_SERIAL_PARAM,
           ...LANGUAGE_PARAM,
         },
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "inspect_object",
+      description: "Read runtime memory from a debuggable Android app via JDWP path expression. Temporarily suspends the app (typically <100ms), resolves a dot-notation path, and resumes. Path examples: 'mViewModel.mDataList[0].title', 'mTitle', 'mDecorView.mFocused.mText'. Start with just the class name and empty path to see all top-level fields. Returns structured JSON with field names, values, and types.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pid: { type: "number", description: "Process ID of the debuggable app (from list_debuggable_processes)" },
+          class_name: { type: "string", description: "Full class name to inspect, e.g. com.example.test.MainActivity" },
+          path: { type: "string", description: "Optional dot-notation field path, e.g. 'mViewModel.mDataList[0].title'. Empty string returns all top-level fields." },
+          max_depth: { type: "number", description: "Max recursion depth for nested objects (default: 8)" },
+          port: { type: "number", description: "Optional local port for JDWP forwarding (default: 8701)" },
+          ...DEVICE_SERIAL_PARAM,
+          ...LANGUAGE_PARAM,
+        },
+        required: ["pid", "class_name"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "tap",
+      description: "Simulate a tap/click on the Android device at the specified coordinates. Use after find_views or analyze_screen to get coordinates from view bounds. Example: tap(x=540, y=1200) to click the center of a button.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          x: { type: "number", description: "X coordinate to tap" },
+          y: { type: "number", description: "Y coordinate to tap" },
+          ...DEVICE_SERIAL_PARAM,
+          ...LANGUAGE_PARAM,
+        },
+        required: ["x", "y"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "snapshot",
+      description: "Take a timed memory snapshot of a debuggable app. Connects to JDWP, suspends the VM, reads ALL fields of the specified class instance, then resumes. Accepts an optional interval_seconds for repeated polling (compares with previous snapshot and only returns differences). Combine with dump_view_tree for view-data correlation.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pid: { type: "number", description: "Process ID of the debuggable app" },
+          class_name: { type: "string", description: "Full class name to snapshot, e.g. com.example.test.MainActivity" },
+          path: { type: "string", description: "Optional field path to narrow the snapshot. Empty returns all fields." },
+          interval_seconds: { type: "number", description: "Optional: poll continuously at this interval. Each poll compares with previous and returns only changed fields." },
+          count: { type: "number", description: "Number of snapshots to take when polling (default: 3)" },
+          port: { type: "number", description: "Optional local port for JDWP forwarding (default: 8701)" },
+          ...DEVICE_SERIAL_PARAM,
+          ...LANGUAGE_PARAM,
+        },
+        required: ["pid", "class_name"],
+        additionalProperties: false,
+      },
+    },
+    {
+      name: "correlate",
+      description: "View-Data correlation: dumps the view tree AND reads runtime memory from the debugged app in a single operation. Returns both UI structure and backing data so you can compare what the screen shows vs what the app's data model contains. Ideal for detecting data/display mismatches.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          pid: { type: "number", description: "Process ID of the debuggable app" },
+          class_name: { type: "string", description: "Full class name of the Activity/ViewModel to inspect" },
+          ui_path: { type: "string", description: "Optional package filter for the view tree dump" },
+          data_path: { type: "string", description: "Optional field path for the data snapshot" },
+          port: { type: "number", description: "Optional local port for JDWP forwarding (default: 8701)" },
+          ...DEVICE_SERIAL_PARAM,
+          ...LANGUAGE_PARAM,
+        },
+        required: ["pid", "class_name"],
         additionalProperties: false,
       },
     },
@@ -957,6 +1029,131 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    }
+
+    // ── Memory inspection tools ──
+
+    case "inspect_object":
+    case "snapshot": {
+      const inspArgs = (args ?? {}) as Record<string, unknown>;
+      const pid = inspArgs.pid as number;
+      const className = inspArgs.class_name as string;
+      const path = (inspArgs.path as string) || "";
+      const inspPort = (inspArgs.port as number) || 8701;
+      const maxDepth = (inspArgs.max_depth as number) || 8;
+      const intervalSecs = inspArgs.interval_seconds as number | undefined;
+      const snapshotCount = (inspArgs.count as number) || 3;
+      const lang = resolveLocale(inspArgs.language as string | undefined);
+      const inspSerial = inspArgs.device_serial as string | undefined;
+
+      const results: any[] = [];
+      const maxSnapshots = name === "snapshot" && intervalSecs ? snapshotCount : 1;
+
+      for (let snapIdx = 0; snapIdx < maxSnapshots; snapIdx++) {
+        let conn: JdwpConnection | null = null;
+        const localPort = inspPort + snapIdx;
+        try {
+          const { serial } = forwardJdwp(inspSerial, localPort, pid);
+          conn = new JdwpConnection();
+          await conn.connect(localPort);
+          const inspector = new ObjectInspector(conn, maxDepth);
+          const result = await inspector.snapshot(className, path);
+          results.push({
+            snapshot_index: snapIdx,
+            ...result,
+          });
+          conn.disconnect();
+          removeForward(serial, localPort);
+        } catch (e) {
+          if (conn) try { conn.disconnect(); } catch {}
+          try { removeForward(ensureAdbAvailable(inspSerial), localPort); } catch {}
+          results.push({
+            snapshot_index: snapIdx,
+            error: e instanceof Error ? e.message : String(e),
+          });
+          break;
+        }
+        if (snapIdx < maxSnapshots - 1 && intervalSecs) {
+          await new Promise(r => setTimeout(r, intervalSecs * 1000));
+        }
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(results.length === 1 ? results[0] : results, null, 2) }],
+      };
+    }
+
+    case "tap": {
+      const tapArgs = (args ?? {}) as Record<string, unknown>;
+      const x = tapArgs.x as number;
+      const y = tapArgs.y as number;
+      const tapSerial = tapArgs.device_serial as string | undefined;
+      try {
+        const serial = ensureAdbAvailable(tapSerial);
+        execSync(`adb -s ${serial} shell input tap ${x} ${y}`, { encoding: "utf-8" });
+        return {
+          content: [{ type: "text", text: JSON.stringify({ success: true, x, y }) }],
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text", text: JSON.stringify({ error: e instanceof Error ? e.message : String(e) }) }],
+          isError: true,
+        };
+      }
+    }
+
+    case "correlate": {
+      const corrArgs = (args ?? {}) as Record<string, unknown>;
+      const corrPid = corrArgs.pid as number;
+      const corrClassName = corrArgs.class_name as string;
+      const uiFilter = corrArgs.ui_path as string | undefined;
+      const dataPath = (corrArgs.data_path as string) || "";
+      const corrPort = (corrArgs.port as number) || 8701;
+      const corrSerial = corrArgs.device_serial as string | undefined;
+      const lang = resolveLocale(corrArgs.language as string | undefined);
+
+      const result: Record<string, any> = {};
+
+      // 1. Dump view tree
+      try {
+        const xml = dumpViewTreeXml(corrSerial);
+        const roots = parseViewTreeXml(xml);
+        const filtered = uiFilter
+          ? findViews(roots, { package_name: uiFilter })
+          : roots;
+        result.ui = {
+          total_nodes: filtered.length,
+          tree: filtered.slice(0, 100).map(n => ({
+            class: n.class_name,
+            text: n.text?.slice(0, 80),
+            resource_id: n.resource_id,
+            bounds: n.bounds,
+          })),
+        };
+      } catch (e) {
+        result.ui = { error: e instanceof Error ? e.message : String(e) };
+      }
+
+      // 2. Read memory
+      let conn: JdwpConnection | null = null;
+      try {
+        const { serial } = forwardJdwp(corrSerial, corrPort, corrPid);
+        conn = new JdwpConnection();
+        await conn.connect(corrPort);
+        const inspector = new ObjectInspector(conn);
+        const snapshot = await inspector.snapshot(corrClassName, dataPath);
+        result.memory = snapshot;
+        conn.disconnect();
+        removeForward(serial, corrPort);
+      } catch (e) {
+        if (conn) try { conn.disconnect(); } catch {}
+        try { removeForward(ensureAdbAvailable(corrSerial), corrPort); } catch {}
+        result.memory = { error: e instanceof Error ? e.message : String(e) };
       }
 
       return {
